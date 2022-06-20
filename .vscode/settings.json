@@ -1,0 +1,4 @@
+{
+    "omnisharp.useModernNet": false,
+    "editor.formatOnSave": true
+}

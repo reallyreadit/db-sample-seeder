@@ -1,0 +1,20 @@
+{
+	"name": "Readup API",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"mounts": [
+		"source=${localWorkspaceFolder}/../api,target=/api,type=bind,consistency=cached"
+	],
+	"containerEnv": {
+		"ASPNETCORE_ENVIRONMENT": "Development"
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-dotnettools.csharp",
+				"eamodio.gitlens"
+			]
+		}
+	}
+}
