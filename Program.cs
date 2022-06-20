@@ -6,6 +6,8 @@ using api.DataAccess;
 using api.DataAccess.Models;
 using System.Threading.Tasks;
 using System.Data;
+using Microsoft.AspNetCore.Cryptography.KeyDerivation;
+using System.Security.Cryptography;
 
 namespace db_sample_seeder
 {
@@ -18,6 +20,43 @@ namespace db_sample_seeder
 			await Program.Connection();
 		}
 
+		public static async Task<long> CreateSampleArticle(
+			NpgsqlConnection db,
+			string title,
+			Source source,
+			string description,
+			string articleURL,
+			string imageURL,
+			UserAccount importer
+		)
+		{
+
+			var daysAgoPublished = RandomNumberGenerator.GetInt32(1, 20);
+			var article = db.CreateArticle(
+						title,
+						FullSlug(source.Slug, title),
+						sourceId: source.Id,
+						datePublished: DateTime.Now.AddDays(-daysAgoPublished),
+						dateModified: null,
+						section: "",
+						description,
+						authors: new AuthorMetadata[1] { new AuthorMetadata("Mega Writer", "https://website.com/mega-writer", "mega-writer") },
+						tags: new TagMetadata[0] { }
+					);
+
+			int wordCount = RandomNumberGenerator.GetInt32(200, 2300);
+
+			db.CreatePage(article, 1, wordCount, wordCount, articleURL);
+
+			await db.SetArticleImage(article, importer.Id, imageURL);
+
+			// Make the user read the article
+			var userArticle = await db.CreateUserArticle(article, importer.Id, wordCount, true, new api.Analytics.ClientAnalytics());
+			db.UpdateReadProgress(userArticle.Id, new int[1] { wordCount }, new api.Analytics.ClientAnalytics());
+
+			return article;
+		}
+
 		static async Task Connection()
 		{
 			Program.InitalizeNpgsqlMappings();
@@ -26,96 +65,62 @@ namespace db_sample_seeder
 			using (var db = new NpgsqlConnection(connString))
 			{
 				// Create a user
-				var user = await db.CreateUserAccount("PrimordialReader", "sample@email.com", new byte[0] { }, new byte[0] { }, 347, DisplayTheme.Light, new UserAccountCreationAnalytics());
+				var salt = GenerateSalt();
+				var password = "password";
+				var user = await db.CreateUserAccount("PrimordialReader", "sample@email.com", HashPassword(password, salt), salt, 347, DisplayTheme.Light, new UserAccountCreationAnalytics());
 
 				// Create a website source
 				var source = db.CreateSource("Best website ever", "https://website.com", "website.com", "best-website-ever");
 
-				// Create article 1
-				var article = db.CreateArticle(
-							"Great Article",
-							"best-website-ever_article-one",
-							sourceId: source.Id,
-							datePublished: DateTime.Now.AddDays(-5),
-							dateModified: null,
-							section: "",
-							description: "This might just be the best article ever",
-							authors: new AuthorMetadata[1] { new AuthorMetadata("Mega Writer", "https://website.com/mega-writer", "mega-writer") },
-							tags: new TagMetadata[0] { }
-						);
+				var article1 = await Program.CreateSampleArticle(db,
+					"The White Swamphen Revealed",
+					source,
+					"The white swamphen (Porphyrio albus) was a rail found on Lord Howe Island, east of the Australian mainland. All contemporary accounts and illustrations were produced between 1788 and 1790, when the bird was first encountered by British ship crews.",
+					"https://website.com/the-white-swamphen",
+					"https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/Liverpool_white_swamphen.jpg/136px-Liverpool_white_swamphen.jpg",
+					user);
 
-				db.CreatePage(article, 1, 500, 500, "https://website.com/article_one");
+				await db.CreateComment("It was a good read!", article1, null, user.Id, new api.Analytics.ClientAnalytics());
 
-				await db.SetArticleImage(article, user.Id, "https://randomwordgenerator.com/img/picture-generator/57e7d7444955ac14f1dc8460962e33791c3ad6e04e50744172297cd59344c5_640.jpg");
-
-				var userArticle = await db.CreateUserArticle(article, user.Id, 500, true, new api.Analytics.ClientAnalytics());
-				db.UpdateReadProgress(userArticle.Id, new int[1] { 500 }, new api.Analytics.ClientAnalytics());
-
-				await db.CreateComment("It was a good read!", article, null, user.Id, new api.Analytics.ClientAnalytics());
-
-				// article 2 
-				var article2 = db.CreateArticle(
-						"Second best",
-						"best-website-ever_article-two",
-						sourceId: source.Id,
-						datePublished: DateTime.Now.AddDays(-2),
-						dateModified: null,
-						section: "",
-						description: "This might just be the best article ever",
-						authors: new AuthorMetadata[1] { new AuthorMetadata("Mega Writer", "https://website.com/mega-writer", "mega-writer") },
-						tags: new TagMetadata[0] { }
-					);
-				db.CreatePage(article2, 1, 400, 400, "https://website.com/article_two");
-				await db.SetArticleImage(article2, user.Id, "https://randomwordgenerator.com/img/picture-generator/57e7d7444955ac14f1dc8460962e33791c3ad6e04e50744172297cd59344c5_640.jpg");
-				var userArticle2 = await db.CreateUserArticle(article2, user.Id, 400, true, new api.Analytics.ClientAnalytics());
-				db.UpdateReadProgress(userArticle2.Id, new int[1] { 400 }, new api.Analytics.ClientAnalytics());
+				var article2 = await Program.CreateSampleArticle(db,
+					"The War On The Pronunciation of GIF",
+					source,
+					"The pronunciation of GIF has been disputed since the 1990s. GIF, an acronym for the Graphics Interchange Format, is popularly pronounced in English as a one-syllable word.",
+					"https://website.com/gif-pronunciation",
+					"https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Stephen_Webby_slide_at_the_2013_Webby_Awards.jpg/171px-Stephen_Webby_slide_at_the_2013_Webby_Awards.jpg",
+					user);
 
 				await db.CreateComment("It was a decent read!", article2, null, user.Id, new api.Analytics.ClientAnalytics());
 
-				// Run scoring
-				// var cmd = new NpgsqlCommand("SELECT article_api.score_articles()", db);
-				// await cmd.ExecuteNonQueryAsync();
-
+				// Run the scoring of articles
 				await db.ExecuteAsync(
 					sql: "article_api.score_articles",
 					commandType: CommandType.StoredProcedure
 				);
 
+				// Set an AOTD
 				await db.SetAotd();
 
-				// one ID gets returned now, for the "hot articles" db call, but is 
-				// later processed by articles.get_articles which returns null 
-
-				// SELECT articles.get_articles('{ 1, 2 }', 1) returned nothing
-				// fixed by adding pages
-
-				// SELECT community_reads.get_aotds(1) returns an id
-				// SELECT articles.get_article_by_id(1, 1) also works
-
-				// article 2 
-				var article3 = db.CreateArticle(
-						"Third best",
-						"best-website-ever_article-three",
-						sourceId: source.Id,
-						datePublished: DateTime.Now.AddDays(-1),
-						dateModified: null,
-						section: "",
-						description: "This might just be the best article ever",
-						authors: new AuthorMetadata[1] { new AuthorMetadata("Mega Writer", "https://website.com/mega-writer", "mega-writer") },
-						tags: new TagMetadata[0] { }
-					);
-				db.CreatePage(article3, 1, 400, 400, "https://website.com/article_three");
-				await db.SetArticleImage(article3, user.Id, "https://randomwordgenerator.com/img/picture-generator/57e7d7444955ac14f1dc8460962e33791c3ad6e04e50744172297cd59344c5_640.jpg");
-				var userArticle3 = await db.CreateUserArticle(article3, user.Id, 400, true, new api.Analytics.ClientAnalytics());
-				db.UpdateReadProgress(userArticle3.Id, new int[1] { 400 }, new api.Analytics.ClientAnalytics());
+				var article3 = await Program.CreateSampleArticle(db,
+					"The Story Behind The Song",
+					source,
+					"\"I've Just Seen a Face\" is a Beatles song written and sung by Paul McCartney (pictured), first released on the album Help! in August 1965. A cheerful ballad of love at first sight, it may have been inspired by McCartney's relationship with actress Jane Asher.",
+					"https://website.com/the-story-behind-the-song",
+					"https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Paul_McCartney_with_Linda_McCartney_-_Wings_-_1976.jpg/171px-Paul_McCartney_with_Linda_McCartney_-_Wings_-_1976.jpg",
+					user);
 
 				await db.CreateComment("It was a decent read!", article3, null, user.Id, new api.Analytics.ClientAnalytics());
 
-				// set a second AOTD, so we get AOTD history for our homepage UI
+				// Run the scoring of articles again, to populate the Contenders.
+				await db.ExecuteAsync(
+					sql: "article_api.score_articles",
+					commandType: CommandType.StoredProcedure
+				);
+
+				// Set a second AOTD, so we get AOTD history of at least 2 items for the homepage UI
 				await db.SetAotd();
 
 			}
-
 
 		}
 
@@ -157,11 +162,34 @@ namespace db_sample_seeder
 			NpgsqlConnection.GlobalTypeMapper.MapComposite<TagMetadata>();
 		}
 
-		// TODO copy-pasted: make a public utility function in the API?
+		static string FullSlug(string sourceSlug, string articleTitle)
+		{
+			return sourceSlug + "_" + CreateSlug(articleTitle);
+		}
+
+		// Below private methods are copy-pasted from the api repository
+		// should they be extracted into a shared utility package? 
+		// ----------------------------------------------------------------------------------------
 		private static string CreateSlug(string value)
 		{
 			var slug = Regex.Replace(Regex.Replace(value, @"[^a-zA-Z0-9-\s]", ""), @"\s", "-").ToLower();
 			return slug.Length > 80 ? slug.Substring(0, 80) : slug;
 		}
+
+		private static byte[] GenerateSalt()
+		{
+			var salt = new byte[128 / 8];
+			using (var rng = RandomNumberGenerator.Create())
+			{
+				rng.GetBytes(salt);
+			}
+			return salt;
+		}
+		private static byte[] HashPassword(string password, byte[] salt) => KeyDerivation.Pbkdf2(
+			password: password,
+			salt: salt,
+			prf: KeyDerivationPrf.HMACSHA1,
+			iterationCount: 10000,
+			numBytesRequested: 256 / 8);
 	}
 }
